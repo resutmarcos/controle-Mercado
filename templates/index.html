@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Mercado</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2rem; background: #fff; color: #111; }
+        table { border-collapse: collapse; width: 100%; max-width: 720px; }
+        th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+        th { background: #f2f2f2; }
+        .erro { color: #b00020; }
+        .vazio { color: #555; }
+    </style>
+</head>
+<body>
+    <h1>Lista de Preços</h1>
+
+    {% if erro %}
+        <p class="erro">Erro ao conectar ou consultar: {{ erro }}</p>
+    {% elif resultados %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Produto</th>
+                    <th>Mercado</th>
+                    <th>Preço</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for produto, mercado, preco in resultados %}
+                <tr>
+                    <td>{{ produto }}</td>
+                    <td>{{ mercado }}</td>
+                    <td>R$ {{ "%.2f"|format(preco) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="vazio">Nenhum preço cadastrado.</p>
+    {% endif %}
+</body>
+</html>
