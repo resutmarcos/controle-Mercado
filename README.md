@@ -36,4 +36,4 @@ Um sistema web para controle de preços de supermercado e lista de compras, foca
 Adicione aqui uma captura do dashboard quando estiver disponível.
 
 ---
-Desenvolvido por [Marco](https://github.com/resutmarcos)
+Desenvolvido por [Marcos](https://github.com/resutmarcos)
