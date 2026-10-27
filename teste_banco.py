@@ -1,10 +1,15 @@
+import os
+
 import mysql.connector
+from dotenv import load_dotenv
+
+load_dotenv()
 
 try:
     conexao = mysql.connector.connect(
         host="localhost",
         user="root",
-        password="",
+        password=os.getenv("DB_PASSWORD"),
         database="controle_mercado",
     )
 

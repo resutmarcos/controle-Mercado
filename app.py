@@ -1,16 +1,20 @@
+import os
 from datetime import date
 from decimal import Decimal
 from html import escape
 
 import mysql.connector
+from dotenv import load_dotenv
 from flask import Flask, redirect, render_template_string, request, send_from_directory, url_for
+
+load_dotenv()
 
 app = Flask(__name__)
 
 DB = {
     "host": "localhost",
     "user": "root",
-    "password": "",
+    "password": os.getenv("DB_PASSWORD"),
     "database": "controle_mercado",
 }
 
@@ -35,6 +39,8 @@ BASE = """
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" type="image/png" href="/static/favicon.png">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
   <meta name="theme-color" content="#198754">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>{{ titulo }}</title>
@@ -48,7 +54,8 @@ BASE = """
   </main>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/service-worker.js');
+      navigator.serviceWorker.register('/service-worker.js')
+        .catch(error => console.error('Falha ao registrar o service worker:', error));
     }
   </script>
 </body>
