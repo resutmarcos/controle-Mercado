@@ -56,7 +56,7 @@ BASE = """
       background-repeat: no-repeat;
     }
 
-    h1, h2 {
+    h1:not(.text-success), h2 {
       color: #ffffff !important;
       text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
       font-weight: bold;
