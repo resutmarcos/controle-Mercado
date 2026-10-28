@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import date
 from decimal import Decimal
@@ -44,6 +45,17 @@ BASE = """
   <meta name="theme-color" content="#198754">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <title>{{ titulo }}</title>
+  <style>
+    body.bg-light {
+      background-image:
+        linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.5)),
+        url("/static/fundo-escritorio.jpg");
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+      background-repeat: no-repeat;
+    }
+  </style>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
@@ -128,42 +140,49 @@ def dashboard():
     conexao = get_conexao()
     cursor = conexao.cursor(dictionary=True)
 
-    # 1. Calcula o Total Estimado da Lista (soma dos itens não comprados)
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT SUM(
             (SELECT MIN(preco) FROM precos WHERE produto_id = lc.produto_id)
             * lc.quantidade
         ) AS total_estimado
         FROM lista_compras lc
         WHERE lc.comprado = 0
-    """)
+        """
+    )
     resultado_total = cursor.fetchone()
-    total_estimado = resultado_total["total_estimado"] if resultado_total["total_estimado"] else 0.00
+    total_estimado = resultado_total["total_estimado"] or 0
 
-    # 2. NOVIDADE: Calcula o Resumo Geral (Quanto custaria a lista inteira em cada mercado)
-    # Isso pega os itens da lista e soma o preço deles em CADA mercado que tem o preço cadastrado
-    cursor.execute("""
-        SELECT m.nome AS mercado, SUM(pr.preco) AS total_mercado
-        FROM lista_compras lc
-        JOIN precos pr ON pr.produto_id = lc.produto_id
-        JOIN mercados m ON m.id = pr.mercado_id
-        WHERE lc.comprado = 0
-          AND m.ocultar_dashboard = 0
+    cursor.execute(
+        """
+        SELECT m.id AS mercado_id, m.nome AS mercado,
+               SUM(COALESCE(precos_produto.preco_min, 0) * lc.quantidade)
+                   AS total_mercado
+        FROM mercados m
+        LEFT JOIN (
+            SELECT mercado_id, produto_id, MIN(preco) AS preco_min
+            FROM precos
+            GROUP BY mercado_id, produto_id
+        ) precos_produto ON precos_produto.mercado_id = m.id
+        LEFT JOIN lista_compras lc
+            ON lc.produto_id = precos_produto.produto_id
+           AND lc.comprado = 0
+        WHERE m.ocultar_dashboard = 0
         GROUP BY m.id, m.nome
+        HAVING total_mercado > 0
         ORDER BY total_mercado ASC
-    """)
+        """
+    )
     resumo_mercados = cursor.fetchall()
 
-    # Prepara os dados para o gráfico
-    labels_grafico = [r["mercado"] for r in resumo_mercados]
-    dados_grafico = [float(r["total_mercado"]) for r in resumo_mercados]
-    
-    # Cria uma paleta de cores diferentes para cada mercado
-    cores_grafico = ['#4CAF50', '#FF9800', '#2196F3', '#E91E63', '#9C27B0', '#FFEB3B']
-    mensagem_grafico = (
-        ""
-        if resumo_mercados
-        else '<p class="text-muted text-center">Nenhum mercado desmarcado com preços para comparar.</p>'
+    labels_grafico = json.dumps(
+        [r["mercado"] for r in resumo_mercados], ensure_ascii=False
+    ).replace("<", "\\u003c")
+    dados_grafico = json.dumps(
+        [float(r["total_mercado"]) for r in resumo_mercados]
+    )
+    cores_grafico = json.dumps(
+        ["#198754", "#fd7e14", "#0dcaf0", "#d63384", "#6f42c1"]
     )
 
     cursor.execute("SELECT id, nome FROM mercados ORDER BY nome")
@@ -171,116 +190,134 @@ def dashboard():
 
     cursor.execute(
         """
-        SELECT p.id, p.nome AS produto, m.id AS mercado_id,
-               MIN(pr.preco) AS menor_preco
+        SELECT lc.id AS item_id, p.id AS produto_id, p.nome AS produto,
+               lc.quantidade
         FROM lista_compras lc
         JOIN produtos p ON p.id = lc.produto_id
-        LEFT JOIN precos pr ON pr.produto_id = p.id
-        LEFT JOIN mercados m ON m.id = pr.mercado_id
         WHERE lc.comprado = 0
-        GROUP BY p.id, p.nome, m.id
-        ORDER BY p.nome, m.nome
+        ORDER BY p.nome, lc.id
         """
     )
-    comparativos = cursor.fetchall()
+    itens_lista = cursor.fetchall()
+
+    cursor.execute(
+        """
+        SELECT produto_id, mercado_id, MIN(preco) AS menor_preco
+        FROM precos
+        GROUP BY produto_id, mercado_id
+        """
+    )
+    precos_mercados = cursor.fetchall()
 
     cursor.close()
     conexao.close()
 
     precos_por_produto = {}
-    produtos_pendentes = {}
-    for comparativo in comparativos:
-        produto_id = comparativo["id"]
-        produtos_pendentes[produto_id] = comparativo["produto"]
-        if comparativo["mercado_id"] is not None:
-            precos_por_produto[(produto_id, comparativo["mercado_id"])] = (
-                comparativo["menor_preco"]
-            )
+    for preco in precos_mercados:
+        precos_por_produto[(preco["produto_id"], preco["mercado_id"])] = (
+            preco["menor_preco"]
+        )
 
-    cabecalho_comparativo = "".join(
+    th_mercados = "".join(
         f"<th>{escape(mercado['nome'])}</th>" for mercado in todos_mercados
     )
-    linhas_comparativo = []
-    for produto_id, nome_produto in produtos_pendentes.items():
+    linhas_tabela = []
+    for item in itens_lista:
         celulas_precos = []
         for mercado in todos_mercados:
-            preco = precos_por_produto.get((produto_id, mercado["id"]))
+            preco = precos_por_produto.get((item["produto_id"], mercado["id"]))
             valor = f"R$ {float(preco):.2f}" if preco is not None else "-"
             celulas_precos.append(f"<td>{valor}</td>")
-        linhas_comparativo.append(
-            f"<tr><th scope=\"row\">{escape(nome_produto)}</th>"
+        linhas_tabela.append(
+            f"<tr><td class=\"text-start\">{escape(item['produto'])}</td>"
+            f"<td>{float(item['quantidade']):g}</td>"
             f"{''.join(celulas_precos)}</tr>"
         )
 
-    if not linhas_comparativo:
-        linhas_comparativo.append(
-            f'<tr><td colspan="{len(todos_mercados) + 1}">'
-            "Nenhum produto pendente na lista.</td></tr>"
+    quantidade_colunas = len(todos_mercados) + 2
+    if not linhas_tabela:
+        linhas_tabela.append(
+            f'<tr><td colspan="{quantidade_colunas}">'
+            "Nenhum item na lista ou nenhum preço cadastrado.</td></tr>"
         )
     elif not todos_mercados:
-        linhas_comparativo = [
-            '<tr><td colspan="1">Cadastre mercados para comparar os preços.</td></tr>'
+        linhas_tabela = [
+            '<tr><td colspan="2">Cadastre mercados para comparar os preços.</td></tr>'
         ]
 
-    # HTML do Dashboard (atualizado com o Gráfico Geral e a legenda)
+    mensagem_grafico = (
+        ""
+        if resumo_mercados
+        else '<p class="text-muted text-center">Nenhum mercado desmarcado com preços para comparar.</p>'
+    )
+
     conteudo = f"""
     <h1 class="mb-4">Dashboard</h1>
-    
-    <div class="card shadow-sm mb-4">
-      <div class="card-body">
-        <h5 class="card-title">Total estimado da lista</h5>
-        <h2 class="text-success">R$ {total_estimado:.2f}</h2>
-        <p class="text-muted m-0">Itens ainda não comprados, usando o menor preço conhecido de cada produto.</p>
+
+    <div class="row mb-4">
+      <div class="col-md-4 mb-3 mb-md-0">
+        <div class="card shadow-sm border-0 h-100">
+          <div class="card-body d-flex flex-column justify-content-center">
+            <h5 class="text-muted mb-2">Total estimado da lista</h5>
+            <h1 class="text-success fw-bold mb-0">R$ {total_estimado:.2f}</h1>
+            <p class="text-muted small mt-2 mb-0">Itens ainda não comprados (quantidade × menor preço).</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-md-8">
+        <div class="card shadow-sm border-0 h-100">
+          <div class="card-body">
+            <h5 class="card-title mb-3">Onde você gasta menos (lista inteira)</h5>
+            {mensagem_grafico}
+            <div style="height: 200px;">
+              <canvas id="graficoMercados"></canvas>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <div class="card shadow-sm mb-4">
-      <div class="card-header">Comparativo de Preços por Mercado</div>
+    <div class="card shadow-sm border-0">
       <div class="card-body">
+        <h5 class="card-title mb-3">Comparativo de preços (apenas itens da lista)</h5>
         <div class="table-responsive">
-          <table class="table table-bordered table-striped align-middle mb-0">
+          <table class="table table-striped table-hover align-middle mb-0 text-center">
             <thead class="table-dark">
-              <tr><th scope="col">Produto</th>{cabecalho_comparativo}</tr>
+              <tr>
+                <th class="text-start">Produto</th>
+                <th>Qtd</th>
+                {th_mercados}
+              </tr>
             </thead>
-            <tbody>{''.join(linhas_comparativo)}</tbody>
+            <tbody>
+              {''.join(linhas_tabela)}
+            </tbody>
           </table>
         </div>
       </div>
     </div>
 
-    <div class="card shadow-sm">
-      <div class="card-body">
-        <h5 class="card-title mb-4">Onde você gasta menos (Resumo da Lista)</h5>
-        {mensagem_grafico}
-        <div style="max-width: 600px; margin: auto;">
-            <!-- O Gráfico vai ser desenhado aqui -->
-            <canvas id="graficoResumo"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <!-- Aqui você pode manter o seu select de comparação individual se quiser, ou a gente pode adicionar depois -->
-
     <script>
-        const ctx = document.getElementById('graficoResumo').getContext('2d');
+        const ctx = document.getElementById('graficoMercados').getContext('2d');
         new Chart(ctx, {{
             type: 'bar',
             data: {{
                 labels: {labels_grafico},
                 datasets: [{{
-                    label: 'Custo Total da Lista (R$)',
+                    label: 'Custo Total no Mercado (R$)',
                     data: {dados_grafico},
-                    backgroundColor: {cores_grafico}, // Cores diferentes para cada barra
+                    backgroundColor: {cores_grafico},
                     borderColor: '#333',
-                    borderWidth: 1
+                    borderWidth: 1,
+                    borderRadius: 6
                 }}]
             }},
-            options: {{ 
+            options: {{
                 responsive: true,
+                maintainAspectRatio: false,
                 plugins: {{
-                    legend: {{
-                        position: 'top', // Coloca a legenda em cima
-                    }}
+                    legend: {{ display: false }}
                 }},
                 scales: {{
                     y: {{

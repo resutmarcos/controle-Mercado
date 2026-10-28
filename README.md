@@ -9,7 +9,8 @@ Um sistema web para controle de preços de supermercado e lista de compras, foca
 - Cadastro, edição e exclusão de mercados.
 - Dashboard com tabela do menor preço de cada produto por mercado, total estimado por quantidade e gráfico comparativo.
 - Seleção automática dos mercados exibidos no gráfico do Dashboard; mercados desmarcados são incluídos.
-- Interface adaptada para celular, instalável como PWA e com uma página de fallback offline.
+- Exclusão de um mercado também remove os preços históricos vinculados a ele.
+- Interface adaptada para celular, instalável como PWA, com fundo personalizado e página de fallback offline.
 
 ## 🛠️ Tecnologias utilizadas
 - **Python (Flask):** backend e rotas.

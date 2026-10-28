@@ -1,8 +1,9 @@
-const CACHE_NAME = 'mercado-v2';
+const CACHE_NAME = 'mercado-v3';
 const urlsToCache = [
   '/static/manifest.json',
   '/static/icon-192.png',
   '/static/icon-512.png',
+  '/static/fundo-escritorio.jpg',
   '/static/offline.html',
 ];
 
