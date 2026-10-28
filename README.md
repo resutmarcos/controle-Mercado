@@ -7,6 +7,7 @@ Um sistema web para controle de preços de supermercado e lista de compras, foca
 - Registro de preços históricos de cada produto em diferentes mercados.
 - Lista de compras que mostra o menor preço encontrado para cada item.
 - Dashboard com gráficos comparativos para mostrar onde você gasta menos.
+- Seleção de mercados exibidos na comparação do Dashboard; mercados desmarcados são incluídos.
 - Interface adaptada para celular, instalável como PWA e com uma página de fallback offline.
 
 ## 🛠️ Tecnologias utilizadas

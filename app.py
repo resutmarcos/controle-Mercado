@@ -72,6 +72,23 @@ def init_db():
     cursor = conexao.cursor()
     cursor.execute(
         """
+        SELECT COUNT(*)
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'mercados'
+          AND COLUMN_NAME = 'ocultar_dashboard'
+        """
+    )
+    if cursor.fetchone()[0] == 0:
+        cursor.execute(
+            """
+            ALTER TABLE mercados
+            ADD COLUMN ocultar_dashboard TINYINT(1) NOT NULL DEFAULT 0
+            """
+        )
+
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS lista_compras (
             id INT AUTO_INCREMENT PRIMARY KEY,
             produto_id INT NOT NULL,
@@ -130,6 +147,7 @@ def dashboard():
         JOIN precos pr ON pr.produto_id = lc.produto_id
         JOIN mercados m ON m.id = pr.mercado_id
         WHERE lc.comprado = 0
+          AND m.ocultar_dashboard = 0
         GROUP BY m.id, m.nome
         ORDER BY total_mercado ASC
     """)
@@ -141,6 +159,11 @@ def dashboard():
     
     # Cria uma paleta de cores diferentes para cada mercado
     cores_grafico = ['#4CAF50', '#FF9800', '#2196F3', '#E91E63', '#9C27B0', '#FFEB3B']
+    mensagem_grafico = (
+        ""
+        if resumo_mercados
+        else '<p class="text-muted text-center">Nenhum mercado desmarcado com preços para comparar.</p>'
+    )
 
     # 3. Lista os produtos que ainda aparecem em itens não comprados.
     cursor.execute(
@@ -183,6 +206,7 @@ def dashboard():
     <div class="card shadow-sm">
       <div class="card-body">
         <h5 class="card-title mb-4">Onde você gasta menos (Resumo da Lista)</h5>
+        {mensagem_grafico}
         <div style="max-width: 600px; margin: auto;">
             <!-- O Gráfico vai ser desenhado aqui -->
             <canvas id="graficoResumo"></canvas>
@@ -515,6 +539,23 @@ def mercados():
     conexao = get_conexao()
     cursor = conexao.cursor(dictionary=True)
 
+    if request.method == "POST" and request.form.get("acao") == "salvar_comparacao":
+        mercados_ocultos = set(request.form.getlist("ocultar_dashboard"))
+        cursor.execute("SELECT id FROM mercados")
+        ids_mercados = [mercado["id"] for mercado in cursor.fetchall()]
+        if ids_mercados:
+            cursor.executemany(
+                "UPDATE mercados SET ocultar_dashboard = %s WHERE id = %s",
+                [
+                    (int(str(mercado_id) in mercados_ocultos), mercado_id)
+                    for mercado_id in ids_mercados
+                ],
+            )
+        conexao.commit()
+        cursor.close()
+        conexao.close()
+        return redirect(url_for("mercados"))
+
     # Se o formulário foi enviado (POST), salva o novo mercado
     if request.method == "POST":
         nome_mercado = request.form.get("nome_mercado")
@@ -526,13 +567,29 @@ def mercados():
             return redirect(url_for("mercados"))
 
     # Se for GET, apenas mostra a lista de mercados cadastrados
-    cursor.execute("SELECT id, nome FROM mercados ORDER BY nome")
+    cursor.execute(
+        "SELECT id, nome, ocultar_dashboard FROM mercados ORDER BY nome"
+    )
     lista_mercados = cursor.fetchall()
     cursor.close()
     conexao.close()
 
     # Monta as linhas da tabela
-    linhas = "".join([f"<tr><td>{m['id']}</td><td>{m['nome']}</td></tr>" for m in lista_mercados])
+    linhas = "".join(
+        f"""
+        <tr>
+          <td>{m['id']}</td>
+          <td>{escape(m['nome'])}</td>
+          <td>
+            <input class="form-check-input" type="checkbox"
+                   name="ocultar_dashboard" value="{m['id']}"
+                   aria-label="Ocultar {escape(m['nome'], quote=True)} do Dashboard"
+                   {"checked" if m["ocultar_dashboard"] else ""}>
+          </td>
+        </tr>
+        """
+        for m in lista_mercados
+    )
 
     # Monta o HTML da página
     conteudo = f"""
@@ -551,14 +608,19 @@ def mercados():
     <div class="card shadow-sm">
       <div class="card-body">
         <h5 class="card-title">Mercados Cadastrados</h5>
-        <table class="table table-striped mb-0">
-          <thead>
-            <tr><th>ID</th><th>Nome do Mercado</th></tr>
-          </thead>
-          <tbody>
-            {linhas if linhas else '<tr><td colspan="2">Nenhum mercado cadastrado.</td></tr>'}
-          </tbody>
-        </table>
+        <p class="text-muted">Mercados desmarcados aparecem na comparação do Dashboard.</p>
+        <form method="post">
+          <input type="hidden" name="acao" value="salvar_comparacao">
+          <table class="table table-striped">
+            <thead>
+              <tr><th>ID</th><th>Nome do Mercado</th><th>Ocultar do Dashboard</th></tr>
+            </thead>
+            <tbody>
+              {linhas if linhas else '<tr><td colspan="3">Nenhum mercado cadastrado.</td></tr>'}
+            </tbody>
+          </table>
+          <button type="submit" class="btn btn-primary">Salvar seleção</button>
+        </form>
       </div>
     </div>
     """
