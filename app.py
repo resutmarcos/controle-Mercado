@@ -55,6 +55,12 @@ BASE = """
       background-attachment: fixed;
       background-repeat: no-repeat;
     }
+
+    h1, h2 {
+      color: #ffffff !important;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+      font-weight: bold;
+    }
   </style>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -224,20 +230,33 @@ def dashboard():
     linhas_tabela = []
     for item in itens_lista:
         celulas_precos = []
+        precos_produto = [
+            preco
+            for (produto_id, _), preco in precos_por_produto.items()
+            if produto_id == item["produto_id"] and preco is not None
+        ]
+        menor_preco_geral = min(precos_produto) if precos_produto else None
+
         for mercado in todos_mercados:
             preco = precos_por_produto.get((item["produto_id"], mercado["id"]))
-            valor = f"R$ {float(preco):.2f}" if preco is not None else "-"
-            celulas_precos.append(f"<td>{valor}</td>")
+            if preco is None:
+                celulas_precos.append('<td class="text-muted">-</td>')
+            elif preco == menor_preco_geral:
+                celulas_precos.append(
+                    f'<td class="table-success fw-bold text-success">'
+                    f"R$ {float(preco):.2f}</td>"
+                )
+            else:
+                celulas_precos.append(f"<td>R$ {float(preco):.2f}</td>")
         linhas_tabela.append(
-            f"<tr><td class=\"text-start\">{escape(item['produto'])}</td>"
-            f"<td>{float(item['quantidade']):g}</td>"
+            f"<tr><td class='text-start fw-bold'>{escape(item['produto'])}</td>"
+            f"<td class='text-center'>{float(item['quantidade']):g}</td>"
             f"{''.join(celulas_precos)}</tr>"
         )
 
-    quantidade_colunas = len(todos_mercados) + 2
     if not linhas_tabela:
         linhas_tabela.append(
-            f'<tr><td colspan="{quantidade_colunas}">'
+            '<tr><td colspan="100" class="text-center">'
             "Nenhum item na lista ou nenhum preço cadastrado.</td></tr>"
         )
     elif not todos_mercados:
@@ -280,13 +299,13 @@ def dashboard():
 
     <div class="card shadow-sm border-0">
       <div class="card-body">
-        <h5 class="card-title mb-3">Comparativo de preços (apenas itens da lista)</h5>
+        <h5 class="card-title mb-3">Comparativo de Preços (Apenas Itens da Lista)</h5>
         <div class="table-responsive">
-          <table class="table table-striped table-hover align-middle mb-0 text-center">
+          <table class="table table-hover align-middle mb-0">
             <thead class="table-dark">
               <tr>
                 <th class="text-start">Produto</th>
-                <th>Qtd</th>
+                <th class="text-center">Qtd</th>
                 {th_mercados}
               </tr>
             </thead>
