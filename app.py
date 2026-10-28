@@ -132,6 +132,7 @@ def dashboard():
     cursor.execute("""
         SELECT SUM(
             (SELECT MIN(preco) FROM precos WHERE produto_id = lc.produto_id)
+            * lc.quantidade
         ) AS total_estimado
         FROM lista_compras lc
         WHERE lc.comprado = 0
@@ -165,24 +166,61 @@ def dashboard():
         else '<p class="text-muted text-center">Nenhum mercado desmarcado com preços para comparar.</p>'
     )
 
-    # 3. Lista os produtos que ainda aparecem em itens não comprados.
+    cursor.execute("SELECT id, nome FROM mercados ORDER BY nome")
+    todos_mercados = cursor.fetchall()
+
     cursor.execute(
         """
-        SELECT DISTINCT p.id, p.nome
-        FROM produtos p
-        JOIN lista_compras lc ON p.id = lc.produto_id
+        SELECT p.id, p.nome AS produto, m.id AS mercado_id,
+               MIN(pr.preco) AS menor_preco
+        FROM lista_compras lc
+        JOIN produtos p ON p.id = lc.produto_id
+        LEFT JOIN precos pr ON pr.produto_id = p.id
+        LEFT JOIN mercados m ON m.id = pr.mercado_id
         WHERE lc.comprado = 0
-        ORDER BY p.nome
+        GROUP BY p.id, p.nome, m.id
+        ORDER BY p.nome, m.nome
         """
     )
-    produtos_pendentes = cursor.fetchall()
+    comparativos = cursor.fetchall()
 
     cursor.close()
     conexao.close()
 
-    linhas_produtos = "".join(
-        f"<li>{escape(produto['nome'])}</li>" for produto in produtos_pendentes
-    ) or "<li>Nenhum produto pendente.</li>"
+    precos_por_produto = {}
+    produtos_pendentes = {}
+    for comparativo in comparativos:
+        produto_id = comparativo["id"]
+        produtos_pendentes[produto_id] = comparativo["produto"]
+        if comparativo["mercado_id"] is not None:
+            precos_por_produto[(produto_id, comparativo["mercado_id"])] = (
+                comparativo["menor_preco"]
+            )
+
+    cabecalho_comparativo = "".join(
+        f"<th>{escape(mercado['nome'])}</th>" for mercado in todos_mercados
+    )
+    linhas_comparativo = []
+    for produto_id, nome_produto in produtos_pendentes.items():
+        celulas_precos = []
+        for mercado in todos_mercados:
+            preco = precos_por_produto.get((produto_id, mercado["id"]))
+            valor = f"R$ {float(preco):.2f}" if preco is not None else "-"
+            celulas_precos.append(f"<td>{valor}</td>")
+        linhas_comparativo.append(
+            f"<tr><th scope=\"row\">{escape(nome_produto)}</th>"
+            f"{''.join(celulas_precos)}</tr>"
+        )
+
+    if not linhas_comparativo:
+        linhas_comparativo.append(
+            f'<tr><td colspan="{len(todos_mercados) + 1}">'
+            "Nenhum produto pendente na lista.</td></tr>"
+        )
+    elif not todos_mercados:
+        linhas_comparativo = [
+            '<tr><td colspan="1">Cadastre mercados para comparar os preços.</td></tr>'
+        ]
 
     # HTML do Dashboard (atualizado com o Gráfico Geral e a legenda)
     conteudo = f"""
@@ -197,9 +235,16 @@ def dashboard():
     </div>
 
     <div class="card shadow-sm mb-4">
+      <div class="card-header">Comparativo de Preços por Mercado</div>
       <div class="card-body">
-        <h5 class="card-title">Produtos ainda não comprados</h5>
-        <ul class="mb-0">{linhas_produtos}</ul>
+        <div class="table-responsive">
+          <table class="table table-bordered table-striped align-middle mb-0">
+            <thead class="table-dark">
+              <tr><th scope="col">Produto</th>{cabecalho_comparativo}</tr>
+            </thead>
+            <tbody>{''.join(linhas_comparativo)}</tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -365,7 +410,8 @@ def lista():
     cursor.execute(
         """
         SELECT lc.id, p.nome AS produto, lc.quantidade, lc.comprado,
-               menor.preco_min
+               menor.preco_min,
+               menor.preco_min * lc.quantidade AS subtotal
         FROM lista_compras lc
         JOIN produtos p ON p.id = lc.produto_id
         LEFT JOIN (
@@ -383,7 +429,15 @@ def lista():
     linhas = []
     for item in itens:
         checked = "checked" if item["comprado"] else ""
-        preco = f"R$ {float(item['preco_min']):.2f}" if item["preco_min"] is not None else "-"
+        if item["preco_min"] is not None:
+            preco = (
+                f"<strong>R$ {float(item['subtotal']):.2f}</strong>"
+                f"<br><small class=\"text-muted\">"
+                f"({float(item['quantidade']):g} x "
+                f"R$ {float(item['preco_min']):.2f})</small>"
+            )
+        else:
+            preco = "-"
         estilo = ' class="text-decoration-line-through text-muted"' if item["comprado"] else ""
         
         linhas.append(
@@ -416,7 +470,7 @@ def lista():
         <p class="text-muted">Marque o item como comprado. O total do dashboard considera só o que ainda falta.</p>
         <table class="table align-middle mb-0">
           <thead>
-            <tr><th>Comprado</th><th>Produto</th><th>Qtd</th><th>Menor preço</th><th>Ações</th></tr>
+            <tr><th>Comprado</th><th>Produto</th><th>Qtd</th><th>Subtotal (menor preço)</th><th>Ações</th></tr>
           </thead>
           <tbody>{''.join(linhas) or '<tr><td colspan="5">Lista vazia.</td></tr>'}</tbody>
         </table>
@@ -584,7 +638,12 @@ def mercados():
             <input class="form-check-input" type="checkbox"
                    name="ocultar_dashboard" value="{m['id']}"
                    aria-label="Ocultar {escape(m['nome'], quote=True)} do Dashboard"
+                   onchange="this.form.requestSubmit()"
                    {"checked" if m["ocultar_dashboard"] else ""}>
+          </td>
+          <td>
+            <a href="{url_for('editar_mercado', id=m['id'])}"
+               class="btn btn-sm btn-warning" aria-label="Editar {escape(m['nome'], quote=True)}">✏️</a>
           </td>
         </tr>
         """
@@ -608,23 +667,89 @@ def mercados():
     <div class="card shadow-sm">
       <div class="card-body">
         <h5 class="card-title">Mercados Cadastrados</h5>
-        <p class="text-muted">Mercados desmarcados aparecem na comparação do Dashboard.</p>
+        <p class="text-muted">Mercados desmarcados aparecem no gráfico do Dashboard. A seleção é salva automaticamente.</p>
         <form method="post">
           <input type="hidden" name="acao" value="salvar_comparacao">
           <table class="table table-striped">
             <thead>
-              <tr><th>ID</th><th>Nome do Mercado</th><th>Ocultar do Dashboard</th></tr>
+              <tr><th>ID</th><th>Nome do Mercado</th><th>Ocultar do Dashboard</th><th>Ações</th></tr>
             </thead>
             <tbody>
-              {linhas if linhas else '<tr><td colspan="3">Nenhum mercado cadastrado.</td></tr>'}
+              {linhas if linhas else '<tr><td colspan="4">Nenhum mercado cadastrado.</td></tr>'}
             </tbody>
           </table>
-          <button type="submit" class="btn btn-primary">Salvar seleção</button>
         </form>
       </div>
     </div>
     """
     return pagina("Mercados", conteudo)
+
+
+@app.route("/editar_mercado/<int:id>", methods=["GET", "POST"])
+def editar_mercado(id):
+    conexao = get_conexao()
+    cursor = conexao.cursor(dictionary=True)
+    mensagem = ""
+
+    if request.method == "POST":
+        acao = request.form.get("acao")
+        if acao == "excluir":
+            cursor.execute("DELETE FROM precos WHERE mercado_id = %s", (id,))
+            cursor.execute("DELETE FROM mercados WHERE id = %s", (id,))
+            conexao.commit()
+            cursor.close()
+            conexao.close()
+            return redirect(url_for("mercados"))
+        else:
+            novo_nome = request.form.get("nome_mercado", "").strip()
+            if novo_nome:
+                cursor.execute(
+                    "UPDATE mercados SET nome = %s WHERE id = %s",
+                    (novo_nome, id),
+                )
+                conexao.commit()
+                cursor.close()
+                conexao.close()
+                return redirect(url_for("mercados"))
+            mensagem = (
+                '<div class="alert alert-danger">Informe o nome do mercado.</div>'
+            )
+
+    cursor.execute("SELECT id, nome FROM mercados WHERE id = %s", (id,))
+    mercado = cursor.fetchone()
+    cursor.close()
+    conexao.close()
+
+    if not mercado:
+        return "Mercado não encontrado.", 404
+
+    nome_mercado = escape(mercado["nome"], quote=True)
+    conteudo = f"""
+    <h2 class="mb-4">Editar Mercado: {escape(mercado['nome'])}</h2>
+    {mensagem}
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <form method="post">
+          <div class="mb-3">
+            <label class="form-label" for="nome_mercado">Nome do Mercado:</label>
+            <input id="nome_mercado" type="text" name="nome_mercado"
+                   class="form-control" value="{nome_mercado}" required>
+          </div>
+          <button type="submit" name="acao" value="salvar" class="btn btn-primary">
+            Salvar Alterações
+          </button>
+          <button type="submit" name="acao" value="excluir" class="btn btn-danger"
+                  onclick="return confirm('Tem certeza que deseja excluir este mercado?')">
+            Excluir
+          </button>
+          <a href="{url_for('mercados')}" class="btn btn-secondary">Cancelar</a>
+        </form>
+      </div>
+    </div>
+    """
+    return pagina(f"Editar {mercado['nome']}", conteudo)
+
+
 init_db()
 
 if __name__ == "__main__":
