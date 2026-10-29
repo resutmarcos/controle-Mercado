@@ -137,10 +137,13 @@ def init_db():
     )
     cursor.execute("SELECT COUNT(*) FROM lista_compras")
     if cursor.fetchone()[0] == 0:
-        cursor.executemany(
-            "INSERT INTO lista_compras (produto_id, quantidade, comprado) VALUES (%s, %s, %s)",
-            [(1, 1, 0), (2, 2, 0), (3, 1, 0)],
-        )
+        cursor.execute("SELECT id FROM produtos ORDER BY id LIMIT 3")
+        produtos_iniciais = cursor.fetchall()
+        if produtos_iniciais:
+            cursor.executemany(
+                "INSERT INTO lista_compras (produto_id, quantidade, comprado) VALUES (%s, %s, %s)",
+                [(produto[0], 1, 0) for produto in produtos_iniciais],
+            )
     conexao.commit()
     cursor.close()
     conexao.close()
@@ -435,10 +438,14 @@ def precos():
     cursor.close()
     conexao.close()
 
-    opts_produtos = "".join(f'<option value="{p["id"]}">{p["nome"]}</option>' for p in produtos)
-    opts_mercados = "".join(f'<option value="{m["id"]}">{m["nome"]}</option>' for m in mercados)
+    opts_produtos = "".join(
+        f'<option value="{p["id"]}">{escape(p["nome"])}</option>' for p in produtos
+    )
+    opts_mercados = "".join(
+        f'<option value="{m["id"]}">{escape(m["nome"])}</option>' for m in mercados
+    )
     linhas = "".join(
-        f"<tr><td>{h['produto']}</td><td>{h['mercado']}</td>"
+        f"<tr><td>{escape(h['produto'])}</td><td>{escape(h['mercado'])}</td>"
         f"<td>R$ {float(h['preco']):.2f}</td><td>{h['data_coleta']}</td></tr>"
         for h in historico
     ) or '<tr><td colspan="4">Nenhum preço cadastrado.</td></tr>'
@@ -544,7 +551,7 @@ def lista():
                          {checked} onchange="this.form.submit()">
                 </form>
               </td>
-              <td>{item['produto']}</td>
+              <td>{escape(item['produto'])}</td>
               <td>{float(item['quantidade']):g}</td>
               <td>{preco}</td>
               <td>
@@ -661,7 +668,7 @@ def editar_item(id):
         return "Item não encontrado na lista.", 404
 
     conteudo = f"""
-    <h2 class="mb-4">Editar Item: {item['produto']}</h2>
+    <h2 class="mb-4">Editar Item: {escape(item['produto'])}</h2>
     <div class="card shadow-sm">
       <div class="card-body">
         <form method="post">
@@ -847,4 +854,4 @@ def editar_mercado(id):
 init_db()
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=os.getenv("FLASK_DEBUG") == "1")

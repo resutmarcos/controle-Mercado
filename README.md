@@ -33,6 +33,8 @@ Um sistema web para controle de preços de supermercado e lista de compras, foca
    ```
 6. Abra `http://127.0.0.1:5000` no navegador.
 
+> O modo de depuração fica desativado por padrão. Para ativá-lo durante o desenvolvimento, defina `FLASK_DEBUG=1` antes de iniciar o aplicativo.
+
 > Para instalar em um celular usando um endereço público, o site precisa estar publicado em HTTPS. A instalação e os ícones funcionam offline após o primeiro carregamento, mas lista, preços e dashboard precisam de conexão com o servidor e o banco MySQL.
 
 ## 📸 Screenshots
