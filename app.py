@@ -19,6 +19,25 @@ DB = {
     "database": "controle_mercado",
 }
 
+QUERY_PRECO_ATUAL = """
+    SELECT p1.produto_id, p1.mercado_id, p1.preco
+    FROM precos p1
+    INNER JOIN (
+        SELECT produto_id, mercado_id, MAX(data_coleta) AS max_data
+        FROM precos
+        GROUP BY produto_id, mercado_id
+    ) p2 ON p1.produto_id = p2.produto_id
+        AND p1.mercado_id = p2.mercado_id
+        AND p1.data_coleta = p2.max_data
+    WHERE p1.id = (
+        SELECT MAX(p3.id)
+        FROM precos p3
+        WHERE p3.produto_id = p1.produto_id
+          AND p3.mercado_id = p1.mercado_id
+          AND p3.data_coleta = p1.data_coleta
+    )
+"""
+
 NAV = """
 <nav class="navbar navbar-expand-lg navbar-dark bg-success mb-4">
   <div class="container">
@@ -147,12 +166,14 @@ def dashboard():
     cursor = conexao.cursor(dictionary=True)
 
     cursor.execute(
-        """
-        SELECT SUM(
-            (SELECT MIN(preco) FROM precos WHERE produto_id = lc.produto_id)
-            * lc.quantidade
-        ) AS total_estimado
+        f"""
+        SELECT SUM(precos_produto.preco_atual * lc.quantidade) AS total_estimado
         FROM lista_compras lc
+        LEFT JOIN (
+            SELECT produto_id, MIN(preco) AS preco_atual
+            FROM ({QUERY_PRECO_ATUAL}) precos_por_mercado
+            GROUP BY produto_id
+        ) precos_produto ON precos_produto.produto_id = lc.produto_id
         WHERE lc.comprado = 0
         """
     )
@@ -160,16 +181,13 @@ def dashboard():
     total_estimado = resultado_total["total_estimado"] or 0
 
     cursor.execute(
-        """
+        f"""
         SELECT m.id AS mercado_id, m.nome AS mercado,
-               SUM(COALESCE(precos_produto.preco_min, 0) * lc.quantidade)
+               SUM(COALESCE(precos_produto.preco, 0) * lc.quantidade)
                    AS total_mercado
         FROM mercados m
-        LEFT JOIN (
-            SELECT mercado_id, produto_id, MIN(preco) AS preco_min
-            FROM precos
-            GROUP BY mercado_id, produto_id
-        ) precos_produto ON precos_produto.mercado_id = m.id
+        LEFT JOIN ({QUERY_PRECO_ATUAL}) precos_produto
+            ON precos_produto.mercado_id = m.id
         LEFT JOIN lista_compras lc
             ON lc.produto_id = precos_produto.produto_id
            AND lc.comprado = 0
@@ -207,10 +225,9 @@ def dashboard():
     itens_lista = cursor.fetchall()
 
     cursor.execute(
-        """
-        SELECT produto_id, mercado_id, MIN(preco) AS menor_preco
-        FROM precos
-        GROUP BY produto_id, mercado_id
+        f"""
+        SELECT produto_id, mercado_id, preco
+        FROM ({QUERY_PRECO_ATUAL}) precos_atuais
         """
     )
     precos_mercados = cursor.fetchall()
@@ -221,7 +238,7 @@ def dashboard():
     precos_por_produto = {}
     for preco in precos_mercados:
         precos_por_produto[(preco["produto_id"], preco["mercado_id"])] = (
-            preco["menor_preco"]
+            preco["preco"]
         )
 
     th_mercados = "".join(
@@ -279,7 +296,7 @@ def dashboard():
           <div class="card-body d-flex flex-column justify-content-center">
             <h5 class="text-muted mb-2">Total estimado da lista</h5>
             <h1 class="text-success fw-bold mb-0">R$ {total_estimado:.2f}</h1>
-            <p class="text-muted small mt-2 mb-0">Itens ainda não comprados (quantidade × menor preço).</p>
+            <p class="text-muted small mt-2 mb-0">Itens ainda não comprados (quantidade × menor preço atual entre os mercados).</p>
           </div>
         </div>
       </div>
@@ -364,13 +381,34 @@ def precos():
         data_coleta = request.form.get("data_coleta") or date.today().isoformat()
         cursor.execute(
             """
-            INSERT INTO precos (produto_id, mercado_id, preco, data_coleta)
-            VALUES (%s, %s, %s, %s)
+            SELECT id
+            FROM precos
+            WHERE produto_id = %s AND mercado_id = %s AND data_coleta = %s
+            ORDER BY id DESC
+            LIMIT 1
             """,
-            (produto_id, mercado_id, preco, data_coleta),
+            (produto_id, mercado_id, data_coleta),
         )
+        preco_existente = cursor.fetchone()
+
+        if preco_existente:
+            cursor.execute(
+                "UPDATE precos SET preco = %s WHERE id = %s",
+                (preco, preco_existente["id"]),
+            )
+            mensagem = (
+                '<div class="alert alert-success">Preço atualizado com sucesso!</div>'
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO precos (produto_id, mercado_id, preco, data_coleta)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (produto_id, mercado_id, preco, data_coleta),
+            )
+            mensagem = '<div class="alert alert-success">Preço cadastrado.</div>'
         conexao.commit()
-        mensagem = '<div class="alert alert-success">Preço cadastrado.</div>'
 
     cursor.execute(
         """
@@ -464,17 +502,17 @@ def lista():
         return redirect(url_for("lista"))
 
     cursor.execute(
-        """
+        f"""
         SELECT lc.id, p.nome AS produto, lc.quantidade, lc.comprado,
-               menor.preco_min,
-               menor.preco_min * lc.quantidade AS subtotal
+               preco_atual.preco_min,
+               preco_atual.preco_min * lc.quantidade AS subtotal
         FROM lista_compras lc
         JOIN produtos p ON p.id = lc.produto_id
         LEFT JOIN (
             SELECT produto_id, MIN(preco) AS preco_min
-            FROM precos
+            FROM ({QUERY_PRECO_ATUAL}) precos_por_mercado
             GROUP BY produto_id
-        ) menor ON menor.produto_id = lc.produto_id
+        ) preco_atual ON preco_atual.produto_id = lc.produto_id
         ORDER BY lc.comprado, p.nome
         """
     )

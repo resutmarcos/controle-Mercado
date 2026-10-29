@@ -5,7 +5,7 @@ Um sistema web para controle de preços de supermercado e lista de compras, foca
 ## 🎯 O que o sistema faz?
 - Cadastro de mercados e produtos.
 - Registro de preços históricos de cada produto em diferentes mercados.
-- Lista de compras com subtotal por quantidade e menor preço conhecido.
+- Lista de compras com subtotal por quantidade e menor preço atual entre os mercados.
 - Cadastro, edição e exclusão de mercados.
 - Dashboard com tabela do menor preço de cada produto por mercado, total estimado por quantidade e gráfico comparativo.
 - Seleção automática dos mercados exibidos no gráfico do Dashboard; mercados desmarcados são incluídos.
