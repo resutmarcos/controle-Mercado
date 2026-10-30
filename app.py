@@ -212,7 +212,10 @@ def dashboard():
         ["#198754", "#fd7e14", "#0dcaf0", "#d63384", "#6f42c1"]
     )
 
-    cursor.execute("SELECT id, nome FROM mercados ORDER BY nome")
+    # Busca apenas os mercados que NÃO estão ocultos para a tabela também
+    cursor.execute(
+        "SELECT id, nome FROM mercados WHERE ocultar_dashboard = 0 ORDER BY nome"
+    )
     todos_mercados = cursor.fetchall()
 
     cursor.execute(
@@ -768,7 +771,7 @@ def mercados():
     <div class="card shadow-sm">
       <div class="card-body">
         <h5 class="card-title">Mercados Cadastrados</h5>
-        <p class="text-muted">Mercados desmarcados aparecem no gráfico do Dashboard. A seleção é salva automaticamente.</p>
+        <p class="text-muted">Mercados desmarcados aparecem no Dashboard (gráfico e tabela). A seleção é salva automaticamente.</p>
         <form method="post">
           <input type="hidden" name="acao" value="salvar_comparacao">
           <table class="table table-striped">
