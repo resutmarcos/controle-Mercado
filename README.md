@@ -38,7 +38,7 @@ Um sistema web para controle de preços de supermercado e lista de compras, foca
 > Para instalar em um celular usando um endereço público, o site precisa estar publicado em HTTPS. A instalação e os ícones funcionam offline após o primeiro carregamento, mas lista, preços e dashboard precisam de conexão com o servidor e o banco MySQL.
 
 ## 📸 Screenshots
-Adicione aqui uma captura do dashboard quando estiver disponível.
+![Dashboard do Controle de Mercado](screenshots/dashboard.png)
 
 ---
 Desenvolvido por [Marcos](https://github.com/resutmarcos)
