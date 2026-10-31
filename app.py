@@ -1,7 +1,7 @@
 import json
 import os
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from html import escape
 
 import mysql.connector
@@ -39,7 +39,7 @@ QUERY_PRECO_ATUAL = """
 """
 
 NAV = """
-<nav class="navbar navbar-expand-lg navbar-dark bg-success mb-4">
+<nav class="navbar navbar-expand-lg navbar-dark bg-success sticky-top shadow-sm">
   <div class="container">
     <a class="navbar-brand" href="/">Controle de Mercado</a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
@@ -128,7 +128,7 @@ BASE = """
 </head>
 <body class="bg-light">
   """ + NAV + """
-  <main class="container pb-5">
+  <main class="container pt-3 pb-5">
     {{ conteudo|safe }}
   </main>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -137,6 +137,23 @@ BASE = """
       navigator.serviceWorker.register('/service-worker.js')
         .catch(error => console.error('Falha ao registrar o service worker:', error));
     }
+
+    document.addEventListener('click', event => {
+      const menu = document.getElementById('menuPrincipal');
+      const botao = document.querySelector('.navbar-toggler');
+      if (!menu || !botao || !menu.classList.contains('show')) {
+        return;
+      }
+
+      const clicado = event.target;
+      if (menu.contains(clicado)) {
+        if (clicado instanceof Element && clicado.closest('.nav-link')) {
+          bootstrap.Collapse.getOrCreateInstance(menu).hide();
+        }
+      } else if (!botao.contains(clicado)) {
+        bootstrap.Collapse.getOrCreateInstance(menu).hide();
+      }
+    });
   </script>
 </body>
 </html>
@@ -145,6 +162,29 @@ BASE = """
 
 def get_conexao():
     return mysql.connector.connect(**DB)
+
+
+def decimal_formulario(valor):
+    try:
+        numero = Decimal(valor)
+    except (InvalidOperation, TypeError):
+        return None
+    return numero if numero.is_finite() else None
+
+
+def quantidade_valida(valor):
+    quantidade = decimal_formulario(valor)
+    if (
+        quantidade is None
+        or not Decimal("1") <= quantidade <= Decimal("99999999.99")
+    ):
+        return None
+    try:
+        if quantidade.quantize(Decimal("0.01")) != quantidade:
+            return None
+    except InvalidOperation:
+        return None
+    return quantidade
 
 
 def init_db():
@@ -169,6 +209,16 @@ def init_db():
 
     cursor.execute(
         """
+        SELECT COUNT(*)
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'lista_compras'
+        """
+    )
+    lista_compras_existia = cursor.fetchone()[0] > 0
+
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS lista_compras (
             id INT AUTO_INCREMENT PRIMARY KEY,
             produto_id INT NOT NULL,
@@ -178,8 +228,7 @@ def init_db():
         )
         """
     )
-    cursor.execute("SELECT COUNT(*) FROM lista_compras")
-    if cursor.fetchone()[0] == 0:
+    if not lista_compras_existia:
         cursor.execute("SELECT id FROM produtos ORDER BY id LIMIT 3")
         produtos_iniciais = cursor.fetchall()
         if produtos_iniciais:
@@ -213,11 +262,16 @@ def dashboard():
 
     cursor.execute(
         f"""
-        SELECT SUM(precos_produto.preco_atual * lc.quantidade) AS total_estimado
+        SELECT SUM(precos_produto.preco_atual * lc.quantidade) AS total_estimado,
+               SUM(
+                   CASE WHEN precos_produto.preco_atual IS NULL THEN 1 ELSE 0 END
+               ) AS itens_sem_preco
         FROM lista_compras lc
         LEFT JOIN (
-            SELECT produto_id, MIN(preco) AS preco_atual
+            SELECT precos_por_mercado.produto_id, MIN(precos_por_mercado.preco) AS preco_atual
             FROM ({QUERY_PRECO_ATUAL}) precos_por_mercado
+            JOIN mercados m ON m.id = precos_por_mercado.mercado_id
+            WHERE m.ocultar_dashboard = 0
             GROUP BY produto_id
         ) precos_produto ON precos_produto.produto_id = lc.produto_id
         WHERE lc.comprado = 0
@@ -225,6 +279,7 @@ def dashboard():
     )
     resultado_total = cursor.fetchone()
     total_estimado = resultado_total["total_estimado"] or 0
+    itens_sem_preco = resultado_total["itens_sem_preco"] or 0
 
     cursor.execute(
         f"""
@@ -251,8 +306,9 @@ def dashboard():
     dados_grafico = json.dumps(
         [float(r["total_mercado"]) for r in resumo_mercados]
     )
+    paleta_cores = ["#198754", "#fd7e14", "#0dcaf0", "#d63384", "#6f42c1"]
     cores_grafico = json.dumps(
-        ["#198754", "#fd7e14", "#0dcaf0", "#d63384", "#6f42c1"]
+        [paleta_cores[i % len(paleta_cores)] for i in range(len(resumo_mercados))]
     )
 
     # Busca apenas os mercados que NÃO estão ocultos para a tabela também
@@ -297,10 +353,10 @@ def dashboard():
     for item in itens_lista:
         celulas_precos = []
         precos_produto = [
-            preco
-            for (produto_id, _), preco in precos_por_produto.items()
-            if produto_id == item["produto_id"] and preco is not None
+            precos_por_produto.get((item["produto_id"], mercado["id"]))
+            for mercado in todos_mercados
         ]
+        precos_produto = [preco for preco in precos_produto if preco is not None]
         menor_preco_geral = min(precos_produto) if precos_produto else None
 
         for mercado in todos_mercados:
@@ -327,13 +383,26 @@ def dashboard():
         )
     elif not todos_mercados:
         linhas_tabela = [
-            '<tr><td colspan="2">Cadastre mercados para comparar os preços.</td></tr>'
+            '<tr><td colspan="2">Nenhum mercado visível. Cadastre um mercado ou desmarque "Ocultar do Dashboard" em Mercados.</td></tr>'
         ]
 
-    mensagem_grafico = (
-        ""
-        if resumo_mercados
-        else '<p class="text-muted text-center">Nenhum mercado desmarcado com preços para comparar.</p>'
+    if not itens_lista:
+        mensagem_grafico = (
+            '<p class="text-muted text-center">'
+            "Adicione itens à lista de compras para comparar os mercados.</p>"
+        )
+    elif resumo_mercados:
+        mensagem_grafico = ""
+    else:
+        mensagem_grafico = (
+            '<p class="text-muted text-center">'
+            "Nenhum mercado visível com preços cadastrados para comparar.</p>"
+        )
+    aviso_total = (
+        f'<p class="text-warning small mt-2 mb-0">Sem preço em mercados visíveis para '
+        f'{itens_sem_preco} {"item" if itens_sem_preco == 1 else "itens"}; o total é parcial.</p>'
+        if itens_sem_preco
+        else ""
     )
 
     conteudo = f"""
@@ -345,7 +414,8 @@ def dashboard():
           <div class="card-body d-flex flex-column justify-content-center">
             <h5 class="text-muted mb-2">Total estimado da lista</h5>
             <h1 class="text-success fw-bold mb-0">R$ {total_estimado:.2f}</h1>
-            <p class="text-muted small mt-2 mb-0">Itens ainda não comprados (quantidade × menor preço atual entre os mercados).</p>
+            <p class="text-muted small mt-2 mb-0">Itens ainda não comprados (quantidade × menor preço atual entre os mercados visíveis).</p>
+            {aviso_total}
           </div>
         </div>
       </div>
@@ -401,8 +471,27 @@ def dashboard():
             options: {{
                 responsive: true,
                 maintainAspectRatio: false,
+                layout: {{
+                    padding: {{ top: 24 }}
+                }},
                 plugins: {{
-                    legend: {{ display: false }}
+                    legend: {{ display: false }},
+                    tooltip: {{
+                        callbacks: {{
+                            label: function(context) {{
+                                const label = context.dataset.label
+                                    ? context.dataset.label + ': '
+                                    : '';
+                                if (context.parsed.y === null) {{
+                                    return label;
+                                }}
+                                return label + new Intl.NumberFormat('pt-BR', {{
+                                    style: 'currency',
+                                    currency: 'BRL'
+                                }}).format(context.parsed.y);
+                            }}
+                        }}
+                    }}
                 }},
                 scales: {{
                     y: {{
@@ -410,7 +499,34 @@ def dashboard():
                         title: {{ display: true, text: 'Preço (R$)' }}
                     }}
                 }}
-            }}
+            }},
+            plugins: [{{
+                id: 'customLabels',
+                afterDatasetsDraw(chart) {{
+                    const context = chart.ctx;
+                    context.save();
+                    context.fillStyle = '#212529';
+                    context.font = 'bold 12px sans-serif';
+                    context.textAlign = 'center';
+                    context.textBaseline = 'bottom';
+
+                    chart.data.datasets.forEach((dataset, datasetIndex) => {{
+                        const meta = chart.getDatasetMeta(datasetIndex);
+                        meta.data.forEach((bar, index) => {{
+                            const value = dataset.data[index];
+                            context.fillText(
+                                new Intl.NumberFormat('pt-BR', {{
+                                    style: 'currency',
+                                    currency: 'BRL'
+                                }}).format(Number(value)),
+                                bar.x,
+                                bar.y - 5
+                            );
+                        }});
+                    }});
+                    context.restore();
+                }}
+            }}]
         }});
     </script>
     """
@@ -424,40 +540,71 @@ def precos():
     cursor = conexao.cursor(dictionary=True)
 
     if request.method == "POST":
-        produto_id = request.form.get("produto_id")
-        mercado_id = request.form.get("mercado_id")
-        preco = request.form.get("preco")
+        preco = decimal_formulario(request.form.get("preco"))
         data_coleta = request.form.get("data_coleta") or date.today().isoformat()
-        cursor.execute(
-            """
-            SELECT id
-            FROM precos
-            WHERE produto_id = %s AND mercado_id = %s AND data_coleta = %s
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (produto_id, mercado_id, data_coleta),
-        )
-        preco_existente = cursor.fetchone()
-
-        if preco_existente:
-            cursor.execute(
-                "UPDATE precos SET preco = %s WHERE id = %s",
-                (preco, preco_existente["id"]),
+        try:
+            produto_id = int(request.form.get("produto_id", ""))
+            mercado_id = int(request.form.get("mercado_id", ""))
+            data_coleta = date.fromisoformat(data_coleta).isoformat()
+            dados_validos = (
+                produto_id > 0
+                and mercado_id > 0
+                and preco is not None
+                and preco >= 0
+                and preco.quantize(Decimal("0.01")) == preco
             )
+        except (InvalidOperation, TypeError, ValueError):
+            dados_validos = False
+
+        if not dados_validos:
             mensagem = (
-                '<div class="alert alert-success">Preço atualizado com sucesso!</div>'
+                '<div class="alert alert-danger">'
+                "Informe produto, mercado, preço válido e data válida.</div>"
             )
         else:
             cursor.execute(
-                """
-                INSERT INTO precos (produto_id, mercado_id, preco, data_coleta)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (produto_id, mercado_id, preco, data_coleta),
+                "SELECT id FROM produtos WHERE id = %s",
+                (produto_id,),
             )
-            mensagem = '<div class="alert alert-success">Preço cadastrado.</div>'
-        conexao.commit()
+            produto_existe = cursor.fetchone()
+            cursor.execute("SELECT id FROM mercados WHERE id = %s", (mercado_id,))
+            mercado_existe = cursor.fetchone()
+            if not produto_existe or not mercado_existe:
+                mensagem = (
+                    '<div class="alert alert-danger">'
+                    "O produto ou mercado selecionado não existe.</div>"
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM precos
+                    WHERE produto_id = %s AND mercado_id = %s AND data_coleta = %s
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (produto_id, mercado_id, data_coleta),
+                )
+                preco_existente = cursor.fetchone()
+
+                if preco_existente:
+                    cursor.execute(
+                        "UPDATE precos SET preco = %s WHERE id = %s",
+                        (preco, preco_existente["id"]),
+                    )
+                    mensagem = (
+                        '<div class="alert alert-success">Preço atualizado com sucesso!</div>'
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO precos (produto_id, mercado_id, preco, data_coleta)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (produto_id, mercado_id, preco, data_coleta),
+                    )
+                    mensagem = '<div class="alert alert-success">Preço cadastrado.</div>'
+                conexao.commit()
 
     cursor.execute(
         """
@@ -628,50 +775,67 @@ def lista():
 
 @app.route("/adicionar_item", methods=["GET", "POST"])
 def adicionar_item():
-    conexao = get_conexao()
-    cursor = conexao.cursor(dictionary=True)
-
+    mensagem = ""
+    nome_produto = ""
+    quantidade_form = "1"
     if request.method == "POST":
         nome_produto = request.form.get("nome_produto", "").strip()
-        quantidade = request.form.get("quantidade", 1)
-        
-        if nome_produto:
-            # 1. Verifica se o produto já existe no banco
-            cursor.execute("SELECT id FROM produtos WHERE nome = %s", (nome_produto,))
-            produto = cursor.fetchone()
-            
-            if produto:
-                produto_id = produto["id"]
-            else:
-                # 2. Se não existe, cadastra o novo produto e pega o ID gerado
-                cursor.execute("INSERT INTO produtos (nome, categoria) VALUES (%s, 'Geral')", (nome_produto,))
-                conexao.commit()
-                produto_id = cursor.lastrowid
+        quantidade_form = request.form.get("quantidade", "")
+        quantidade = quantidade_valida(quantidade_form)
 
-            # 3. Insere o item na lista de compras
-            cursor.execute(
-                "INSERT INTO lista_compras (produto_id, quantidade, comprado) VALUES (%s, %s, 0)",
-                (produto_id, quantidade)
+        if not nome_produto:
+            mensagem = '<div class="alert alert-danger">Informe o nome do produto.</div>'
+        elif quantidade is None:
+            mensagem = (
+                '<div class="alert alert-danger">'
+                "Informe uma quantidade válida (mínimo 1, até duas casas decimais)."
+                "</div>"
             )
-            conexao.commit()
-            
-        cursor.close()
-        conexao.close()
-        return redirect(url_for("lista"))
+        else:
+            conexao = get_conexao()
+            cursor = conexao.cursor(dictionary=True)
+            try:
+                cursor.execute(
+                    "SELECT id FROM produtos WHERE nome = %s", (nome_produto,)
+                )
+                produto = cursor.fetchone()
 
-    conteudo = """
+                if produto:
+                    produto_id = produto["id"]
+                else:
+                    cursor.execute(
+                        "INSERT INTO produtos (nome, categoria) VALUES (%s, 'Geral')",
+                        (nome_produto,),
+                    )
+                    produto_id = cursor.lastrowid
+
+                cursor.execute(
+                    """
+                    INSERT INTO lista_compras (produto_id, quantidade, comprado)
+                    VALUES (%s, %s, 0)
+                    """,
+                    (produto_id, quantidade),
+                )
+                conexao.commit()
+            finally:
+                cursor.close()
+                conexao.close()
+            return redirect(url_for("lista"))
+
+    conteudo = f"""
     <h2 class="mb-4">Adicionar Item na Lista</h2>
+    {mensagem}
     <div class="card shadow-sm">
       <div class="card-body">
         <form method="post">
           <div class="mb-3">
             <label class="form-label">Nome do Produto:</label>
-            <input type="text" name="nome_produto" class="form-control" placeholder="Ex: Arroz 5kg, Sabão em pó..." required>
+            <input type="text" name="nome_produto" class="form-control" placeholder="Ex: Arroz 5kg, Sabão em pó..." value="{escape(nome_produto, quote=True)}" required>
             <div class="form-text">Se o produto não existir, ele será cadastrado automaticamente.</div>
           </div>
           <div class="mb-3">
             <label class="form-label">Quantidade:</label>
-            <input type="number" name="quantidade" class="form-control" value="1" min="1" required>
+            <input type="number" name="quantidade" class="form-control" value="{escape(quantidade_form, quote=True)}" min="1" step="0.01" required>
           </div>
           <button type="submit" class="btn btn-success">Salvar Item</button>
           <a href="/lista" class="btn btn-secondary">Cancelar</a>
@@ -685,20 +849,37 @@ def adicionar_item():
 def editar_item(id):
     conexao = get_conexao()
     cursor = conexao.cursor(dictionary=True)
+    mensagem = ""
+    quantidade_form = ""
 
     if request.method == "POST":
-        quantidade = request.form.get("quantidade")
         acao = request.form.get("acao")
-        
+
         if acao == "excluir":
             cursor.execute("DELETE FROM lista_compras WHERE id = %s", (id,))
+            conexao.commit()
+            cursor.close()
+            conexao.close()
+            return redirect(url_for("lista"))
+        elif acao == "salvar":
+            quantidade_form = request.form.get("quantidade", "")
+            quantidade = quantidade_valida(quantidade_form)
+            if quantidade is not None:
+                cursor.execute(
+                    "UPDATE lista_compras SET quantidade = %s WHERE id = %s",
+                    (quantidade, id),
+                )
+                conexao.commit()
+                cursor.close()
+                conexao.close()
+                return redirect(url_for("lista"))
+            mensagem = (
+                '<div class="alert alert-danger">'
+                "Informe uma quantidade válida (mínimo 1, até duas casas decimais)."
+                "</div>"
+            )
         else:
-            cursor.execute("UPDATE lista_compras SET quantidade = %s WHERE id = %s", (quantidade, id))
-            
-        conexao.commit()
-        cursor.close()
-        conexao.close()
-        return redirect(url_for("lista"))
+            mensagem = '<div class="alert alert-danger">Ação inválida.</div>'
 
     cursor.execute("""
         SELECT lc.id, lc.quantidade, p.nome AS produto 
@@ -715,12 +896,13 @@ def editar_item(id):
 
     conteudo = f"""
     <h2 class="mb-4">Editar Item: {escape(item['produto'])}</h2>
+    {mensagem}
     <div class="card shadow-sm">
       <div class="card-body">
         <form method="post">
           <div class="mb-3">
             <label class="form-label">Quantidade:</label>
-            <input type="number" name="quantidade" class="form-control" value="{item['quantidade']}" min="1" required>
+            <input type="number" name="quantidade" class="form-control" value="{escape(quantidade_form or str(item['quantidade']), quote=True)}" min="1" step="0.01" required>
           </div>
           
           <button type="submit" name="acao" value="salvar" class="btn btn-primary">Salvar Alterações</button>
@@ -739,6 +921,7 @@ def editar_item(id):
 def mercados():
     conexao = get_conexao()
     cursor = conexao.cursor(dictionary=True)
+    mensagem = ""
 
     if request.method == "POST" and request.form.get("acao") == "salvar_comparacao":
         mercados_ocultos = set(request.form.getlist("ocultar_dashboard"))
@@ -759,13 +942,14 @@ def mercados():
 
     # Se o formulário foi enviado (POST), salva o novo mercado
     if request.method == "POST":
-        nome_mercado = request.form.get("nome_mercado")
-        if nome_mercado: # Evita salvar vazio
+        nome_mercado = request.form.get("nome_mercado", "").strip()
+        if nome_mercado:
             cursor.execute("INSERT INTO mercados (nome) VALUES (%s)", (nome_mercado,))
             conexao.commit()
             cursor.close()
             conexao.close()
             return redirect(url_for("mercados"))
+        mensagem = '<div class="alert alert-danger">Informe o nome do mercado.</div>'
 
     # Se for GET, apenas mostra a lista de mercados cadastrados
     cursor.execute(
@@ -800,6 +984,7 @@ def mercados():
     # Monta o HTML da página
     conteudo = f"""
     <h2 class="mb-4">Gerenciar Mercados</h2>
+    {mensagem}
     
     <div class="card shadow-sm mb-4">
       <div class="card-body">

@@ -8,7 +8,7 @@ Um sistema web para controle de preços de supermercado e lista de compras, foca
 - Lista de compras com subtotal por quantidade e menor preço atual entre os mercados.
 - Cadastro, edição e exclusão de mercados.
 - Dashboard com tabela do menor preço de cada produto por mercado, total estimado por quantidade e gráfico comparativo.
-- Seleção automática dos mercados exibidos no gráfico do Dashboard; mercados desmarcados são incluídos.
+- Mercados ocultos não aparecem na tabela nem no gráfico do Dashboard e não entram no total estimado.
 - Exclusão de um mercado também remove os preços históricos vinculados a ele.
 - Interface adaptada para celular, instalável como PWA, com fundo personalizado e página de fallback offline.
 
