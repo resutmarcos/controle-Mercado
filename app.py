@@ -42,11 +42,18 @@ NAV = """
 <nav class="navbar navbar-expand-lg navbar-dark bg-success mb-4">
   <div class="container">
     <a class="navbar-brand" href="/">Controle de Mercado</a>
-    <div class="navbar-nav ms-auto">
-      <a class="nav-link" href="/">Dashboard</a>
-      <a class="nav-link" href="/precos">Preços</a>
-      <a class="nav-link" href="/mercados">Mercados</a>
-      <a class="nav-link" href="/lista">Lista de compras</a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+            data-bs-target="#menuPrincipal" aria-controls="menuPrincipal"
+            aria-expanded="false" aria-label="Alternar navegação">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="menuPrincipal">
+      <div class="navbar-nav ms-auto dropdown-menu-mobile">
+        <a class="nav-link" href="/">Dashboard</a>
+        <a class="nav-link" href="/precos">Preços</a>
+        <a class="nav-link" href="/mercados">Mercados</a>
+        <a class="nav-link" href="/lista">Lista de compras</a>
+      </div>
     </div>
   </div>
 </nav>
@@ -80,6 +87,41 @@ BASE = """
       text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
       font-weight: bold;
     }
+
+    @media (max-width: 991.98px) {
+      .navbar > .container {
+        position: relative;
+      }
+
+      #menuPrincipal {
+        position: absolute;
+        top: calc(100% + 0.5rem);
+        right: 0;
+        z-index: 1020;
+        width: max-content;
+        min-width: 200px;
+      }
+
+      .dropdown-menu-mobile {
+        width: 100%;
+        padding: 0.5rem 0;
+        background-color: #fff;
+        border: 1px solid rgba(0, 0, 0, 0.15);
+        border-radius: 0.5rem;
+        box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.175);
+      }
+
+      .dropdown-menu-mobile .nav-link {
+        padding: 0.5rem 1rem;
+        color: #212529 !important;
+      }
+
+      .dropdown-menu-mobile .nav-link:hover,
+      .dropdown-menu-mobile .nav-link:focus {
+        background-color: #f8f9fa;
+        border-radius: 0.25rem;
+      }
+    }
   </style>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
@@ -89,6 +131,7 @@ BASE = """
   <main class="container pb-5">
     {{ conteudo|safe }}
   </main>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/service-worker.js')
